@@ -11,13 +11,13 @@
 #SBATCH --output=results/bench_%j.csv
 #SBATCH --error=results/bench_%j.err
 
-DEBUG="off"
+DEBUG="on"
 
 for arg in "$@"; do
     case $arg in
         -r)
-            echo "Running in Debug Mode"
-            DEBUG="on"
+            echo "Running in Release Mode"
+            DEBUG="off"
             ;;
     esac
 done
