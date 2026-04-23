@@ -25,6 +25,7 @@ nvcc -o benchmark \
     src/nccl_ringreduce.cu \
     src/naive_ringreduce.cu \
     src/pipelined_ringreduce_nccl.cu \
+    src/naive_paard.cu \
     -I${NCCL_HOME}/include -L${NCCL_HOME}/lib \
     -I${CRAY_MPICH_PREFIX}/include -L${CRAY_MPICH_PREFIX}/lib \
     -lnccl \

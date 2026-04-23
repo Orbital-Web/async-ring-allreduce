@@ -14,11 +14,13 @@
 
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
+    paard_nccl,
     ring_pipelined_nccl,
     ring_naive,
 };
 
 static const char* impl_names[] = {
+    "Classic Paard",
     "Pipelined Ring",
     "Classic Ring",
 };

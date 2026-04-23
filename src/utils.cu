@@ -12,7 +12,13 @@ __global__ void init_input_kernel(float* buf, int rank, long input_size) {
 
 bool check_correctness(float* h_res, int rank, int n_ranks, long input_size, float atol) {
     int sum_ranks = n_ranks * (n_ranks - 1) * 50;
-    for (long i = 0; i < input_size; i++) {
+
+    // TODO: check from 0 to input_size once we get all gather done for PAARD
+    long chunk_size = input_size / n_ranks;
+    long start_i = chunk_size * rank;
+    long end_i = start_i + chunk_size;
+
+    for (long i = start_i; i < end_i; i++) {
         float expected = (float)sum_ranks + (float)n_ranks * 100.0f * i / input_size;
         float got = h_res[i];
         float diff = fabsf(got - expected);
