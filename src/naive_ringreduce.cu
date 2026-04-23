@@ -60,9 +60,12 @@ static void ring_allreduce(
                        (rank_to_node[rank] != rank_to_node[next_rank] ||
                         rank_to_node[prev_rank] != rank_to_node[rank]);
 
+    // bytes sent per step across the (possibly cross-node) link
+    long step_bytes = chunk_size * (long)sizeof(float);
+
     // --- REDUCE-SCATTER ---
     for (int step = 0; step < n_ranks - 1; step++) {
-        if (at_boundary) maybe_penalize_internode(stream);
+        if (at_boundary) maybe_penalize_internode(stream, step_bytes);
 
         auto [send_off, recv_off] = get_offset(step, rank, n_ranks, chunk_size);
         NCCL_CALL(ncclGroupStart());
@@ -79,7 +82,7 @@ static void ring_allreduce(
 
     // --- ALL-GATHER ---
     for (int step = n_ranks - 1; step < 2 * (n_ranks - 1); step++) {
-        if (at_boundary) maybe_penalize_internode(stream);
+        if (at_boundary) maybe_penalize_internode(stream, step_bytes);
 
         auto [send_off, recv_off] = get_offset(step, rank, n_ranks, chunk_size);
         NCCL_CALL(ncclGroupStart());

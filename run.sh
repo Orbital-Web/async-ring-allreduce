@@ -34,9 +34,16 @@ export FI_CXI_RDZV_GET_MIN=0
 export FI_CXI_RDZV_THRESHOLD=0
 export FI_CXI_RDZV_EAGER_SIZE=0
 
-# synthetic inter-node link penalty (microseconds). default 0 = no penalty.
-# to sweep: GLOBAL_PENALTY_US=100 sbatch run.sh
+# synthetic inter-node link penalty, LogGP-style affine cost:
+#   delay(bytes) = GLOBAL_PENALTY_US us  +  bytes / GLOBAL_BW_GBPS ns
+# GLOBAL_PENALTY_US: fixed per-hop latency in microseconds (default 0)
+# GLOBAL_BW_GBPS:    inter-node bandwidth cap in GB/s (default 0 = unlimited)
+# example sweeps:
+#   GLOBAL_PENALTY_US=100 sbatch run.sh         # latency-only
+#   GLOBAL_BW_GBPS=5 sbatch run.sh              # bandwidth-only (scales with msg size)
+#   GLOBAL_PENALTY_US=50 GLOBAL_BW_GBPS=10 sbatch run.sh   # both
 export GLOBAL_PENALTY_US=${GLOBAL_PENALTY_US:-0}
+export GLOBAL_BW_GBPS=${GLOBAL_BW_GBPS:-0}
 
 module purge
 module load PrgEnv-gnu

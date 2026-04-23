@@ -50,8 +50,16 @@ static void hier_allreduce(
         d_outbuf, my_chunk, chunk_size, ncclFloat, ncclSum, local_comm, stream
     ));
 
-    // inject inter-node link penalty (no-op unless GLOBAL_PENALTY_US is set)
-    maybe_penalize_internode(stream);
+    // inject inter-node link penalty for the entire global all-reduce phase:
+    // each rank's ring-allreduce over global_comm moves
+    //   2 * (n_nodes - 1) / n_nodes  *  chunk_size  floats
+    // across the slow link. we fold all of that traffic into one delay call.
+    int n_nodes;
+    ncclCommCount(global_comm, &n_nodes);
+    long global_bytes = (n_nodes > 1)
+        ? (long)(2 * (n_nodes - 1)) * chunk_size * (long)sizeof(float) / n_nodes
+        : 0;
+    maybe_penalize_internode(stream, global_bytes);
 
     // Step 2: cross-node all-reduce — each rank exchanges its chunk with the
     // corresponding rank on every other node; my_chunk becomes the global sum

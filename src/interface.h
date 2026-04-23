@@ -64,9 +64,12 @@ double get_time();
 // compute and record average, std, min, and max latency in µs
 void analyze_runtime(RunArgs* args, double* deltas);
 
-// sync stream then sleep GLOBAL_PENALTY_US microseconds to model a slow inter-node link.
-// reads GLOBAL_PENALTY_US from env on first call; no-op if unset or zero.
-void maybe_penalize_internode(cudaStream_t stream);
+// enqueue an in-stream delay modelling a slow inter-node link using a LogGP-like
+// affine cost:  delay(bytes) = GLOBAL_PENALTY_US us  +  bytes / GLOBAL_BW_GBPS ns.
+// both env vars read once on first call; no-op if both unset/zero.
+// preserves async overlap because the delay is launched as a cuda kernel on the
+// same stream as the NCCL op it models.
+void maybe_penalize_internode(cudaStream_t stream, long bytes);
 
 
 
