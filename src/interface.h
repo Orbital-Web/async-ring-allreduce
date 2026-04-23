@@ -79,3 +79,5 @@ void ring_naive(RunArgs* args);
 void ring_pipelined_nccl(RunArgs* args);
 // void ring_pipelined_async(RunArgs* args);
 void paard_nccl(RunArgs* args);
+void halving_doubling_allreduce(RunArgs* args);
+void halving_doubling_pipelined(RunArgs* args);
