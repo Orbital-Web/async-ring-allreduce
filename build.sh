@@ -21,9 +21,11 @@ module load nccl
 
 # TODO: add new impls here
 nvcc -o benchmark \
+    -arch=sm_80 \
     src/benchmark.cu src/utils.cu \
     src/naive_ring.cu \
     src/pipelined_ring_nccl.cu \
+    src/hier_ringreduce.cu \
     src/naive_hd.cu \
     src/pipelined_hd_nccl.cu \
     src/naive_paard.cu \

@@ -20,22 +20,28 @@ static std::pair<long, long> get_offset(
     return {send_chunk * chunk_size, recv_chunk * chunk_size};
 }
 
-// ring all-reduce using RS + AG
+// ring all-reduce using RS + AG.
+// rank_to_node: if non-null, sends whose ring neighbor lives on a different node
+// incur the synthetic inter-node penalty via maybe_penalize_internode. the delay
+// is enqueued on the same stream as the send it precedes, so the other stream's
+// work still overlaps — this is the whole reason we don't use host-side sleeps.
 static void ring_allreduce(
-    const float* d_inbuf, float* d_outbuf, long input_size, ncclComm_t comm, cudaStream_t streams[2]
+    const float* d_inbuf,
+    float* d_outbuf,
+    long input_size,
+    ncclComm_t comm,
+    cudaStream_t streams[2],
+    const int* rank_to_node
 ) {
-    // get rank and number of ranks
     int rank, n_ranks;
     ncclCommUserRank(comm, &rank);
     ncclCommCount(comm, &n_ranks);
 
-    // copy input buffer to output buffer
     if (d_inbuf != d_outbuf)
         CUDA_CALL(cudaMemcpyAsync(
             d_outbuf, d_inbuf, input_size * sizeof(float), cudaMemcpyDeviceToDevice, streams[0]
         ));
 
-    // compute chunk size and allocate temporary receive buffers
     const int n_batches = 2;
     int n_chunks = n_ranks * n_batches;
     assert(n_batches > 1);
@@ -46,18 +52,26 @@ static void ring_allreduce(
     CUDA_CALL(cudaMalloc(&temp_bufs[0], chunk_size * sizeof(float)));
     CUDA_CALL(cudaMalloc(&temp_bufs[1], chunk_size * sizeof(float)));
 
-    // --- REDUCE-SCATTER ---
     int next_rank = (rank + 1) % n_ranks;
     int prev_rank = (rank - 1 + n_ranks) % n_ranks;
 
+    // true if either ring neighbor lives on a different node
+    bool at_boundary = rank_to_node &&
+                       (rank_to_node[rank] != rank_to_node[next_rank] ||
+                        rank_to_node[prev_rank] != rank_to_node[rank]);
+
+    // bytes moved per pipelined send across the (possibly cross-node) link
+    long step_bytes = chunk_size * (long)sizeof(float);
+
+    // --- REDUCE-SCATTER ---
     auto [send_off, recv_off] = get_offset(0, rank, n_chunks, n_batches, chunk_size);
+    if (at_boundary) maybe_penalize_internode(streams[0], step_bytes);
     NCCL_CALL(ncclGroupStart());
     NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0]));
     NCCL_CALL(ncclRecv(temp_bufs[0], chunk_size, ncclFloat, prev_rank, comm, streams[0]));
     NCCL_CALL(ncclGroupEnd());
 
     for (int step = 1; step < n_chunks - n_batches; step++) {
-        // reduce
         const int threads = 256;
         long blocks = (chunk_size + threads - 1) / threads;
         add_kernel<<<blocks, threads, 0, streams[(step + 1) % 2]>>>(
@@ -66,6 +80,7 @@ static void ring_allreduce(
         CUDA_CALL(cudaGetLastError());
 
         std::tie(send_off, recv_off) = get_offset(step, rank, n_chunks, n_batches, chunk_size);
+        if (at_boundary) maybe_penalize_internode(streams[step % 2], step_bytes);
         NCCL_CALL(ncclGroupStart());
         NCCL_CALL(
             ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[step % 2])
@@ -74,11 +89,9 @@ static void ring_allreduce(
             ncclRecv(temp_bufs[step % 2], chunk_size, ncclFloat, prev_rank, comm, streams[step % 2])
         );
         NCCL_CALL(ncclGroupEnd());
-
-        // CUDA_CALL(cudaStreamSynchronize(streams[(step + 1) % 2]));
     }
 
-    // reduce (happens concurrently with first all gather)
+    // reduce (happens concurrently with first all-gather)
     const int threads = 256;
     long blocks = (chunk_size + threads - 1) / threads;
     add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf, temp_bufs[1], recv_off, chunk_size);
@@ -87,15 +100,15 @@ static void ring_allreduce(
     // --- ALL-GATHER ---
     std::tie(send_off, recv_off)
         = get_offset(n_chunks - n_batches, rank, n_chunks, n_batches, chunk_size);
+    if (at_boundary) maybe_penalize_internode(streams[0], step_bytes);
     NCCL_CALL(ncclGroupStart());
     NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0]));
     NCCL_CALL(ncclRecv(d_outbuf + recv_off, chunk_size, ncclFloat, prev_rank, comm, streams[0]));
     NCCL_CALL(ncclGroupEnd());
 
-    // CUDA_CALL(cudaStreamSynchronize(streams[1]));
-
     for (int step = n_chunks - n_batches + 1; step < 2 * (n_chunks - n_batches); step++) {
         std::tie(send_off, recv_off) = get_offset(step, rank, n_chunks, n_batches, chunk_size);
+        if (at_boundary) maybe_penalize_internode(streams[0], step_bytes);
         NCCL_CALL(ncclGroupStart());
         NCCL_CALL(
             ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0])
@@ -144,7 +157,7 @@ void ring_pipelined_nccl(RunArgs* args) {
 
 
     // call ring all-reduce
-    ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+    ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->rank_to_node);
 
 
     // copy back result to host and verify output, short circuit if incorrect
@@ -164,14 +177,14 @@ void ring_pipelined_nccl(RunArgs* args) {
 
     // warmup
     for (int i = 0; i < args->n_warmup; i++)
-        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->rank_to_node);
 
 
     // benchmark
     double* deltas = (double*)malloc(args->n_iters * sizeof(double));
     for (int i = 0; i < args->n_iters; i++) {
         double t0 = get_time();
-        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->rank_to_node);
         double t1 = get_time();
         deltas[i] = t1 - t0;
     }

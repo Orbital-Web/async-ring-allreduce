@@ -17,6 +17,7 @@ static RingRunFunc impls[] = {
     paard_nccl,
     ring_pipelined_nccl,
     ring_naive,
+    ring_hierarchical,
     halving_doubling_pipelined,
     halving_doubling_allreduce,
 };
@@ -25,6 +26,7 @@ static const char* impl_names[] = {
     "Classic Paard",
     "Pipelined Ring",
     "Classic Ring",
+    "Hierarchical Ring",
     "Pipelined HD",
     "Classic HD",
 };
@@ -70,6 +72,20 @@ int main(int argc, char** argv) {
     int rank;
     MPI_Comm_rank(active_comm, &rank);
 
+    // determine node membership: ranks on the same node share memory.
+    // this is used by the hierarchical impl and by the inter-node penalty hooks
+    // (GLOBAL_PENALTY_US / GLOBAL_BW_GBPS) to identify cross-node ring edges.
+    MPI_Comm node_comm;
+    MPI_Comm_split_type(active_comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node_comm);
+    int local_rank, local_size;
+    MPI_Comm_rank(node_comm, &local_rank);
+    MPI_Comm_size(node_comm, &local_size);
+    int node_id = rank / local_size;  // assumes contiguous rank assignment per node
+
+    // build rank_to_node table so impls can identify cross-node peers
+    int* rank_to_node = (int*)malloc(n_ranks * sizeof(int));
+    MPI_Allgather(&node_id, 1, MPI_INT, rank_to_node, 1, MPI_INT, active_comm);
+
     // disable certain algorithms based on n_ranks
     bool use_paard = true;
     bool use_tree = true;
@@ -82,17 +98,18 @@ int main(int argc, char** argv) {
         use_tree = false;
     }
 
-    // set up GPU for this process
+    // PAARD assumes 2 GPUs/node; other impls use MPI-derived local_rank.
     int devices_per_node;
     CUDA_CALL(cudaGetDeviceCount(&devices_per_node));
     if (use_paard && devices_per_node != 2) {
         if (rank == 0)
             printf("the number of GPUs/node must equal 2 for PAARD, got %d\n", devices_per_node);
+        MPI_Comm_free(&node_comm);
         MPI_Comm_free(&active_comm);
+        free(rank_to_node);
         MPI_Finalize();
         return 1;
     }
-    int local_rank = rank % devices_per_node;
     CUDA_CALL(cudaSetDevice(local_rank));
 
     // get NCCL Unique ID from rank 0
@@ -137,6 +154,10 @@ int main(int argc, char** argv) {
             RunArgs args;
             args.input_size = input_size;
             args.comm = comm;
+            args.local_rank = local_rank;
+            args.local_size = local_size;
+            args.node_id = node_id;
+            args.rank_to_node = rank_to_node;
             args.n_warmup = n_warmup;
             args.n_iters = n_iters;
             args.atol = atol;
@@ -186,6 +207,8 @@ int main(int argc, char** argv) {
     }
 
     // cleanup
+    free(rank_to_node);
+    MPI_Comm_free(&node_comm);
     NCCL_CALL(ncclCommDestroy(comm));
     MPI_Comm_free(&active_comm);
     MPI_Finalize();

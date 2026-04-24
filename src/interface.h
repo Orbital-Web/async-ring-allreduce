@@ -34,6 +34,11 @@ typedef struct {
     // all-reduce arguments
     long input_size;
     ncclComm_t comm;
+    // node topology: used by hierarchical impl and inter-node penalty
+    int local_rank;      // this rank's position within its node (0..local_size-1)
+    int local_size;      // number of ranks per node
+    int node_id;         // which node this rank is on (0-indexed)
+    int* rank_to_node;   // rank_to_node[r] = node_id of world rank r (length = n_ranks)
     // benchmark & correctness arguments
     int n_warmup;
     int n_iters;
@@ -62,6 +67,13 @@ double get_time();
 // compute and record average, std, min, and max latency in µs
 void analyze_runtime(RunArgs* args, double* deltas);
 
+// enqueue an in-stream delay modelling a slow inter-node link using a LogGP-like
+// affine cost:  delay(bytes) = GLOBAL_PENALTY_US us  +  bytes / GLOBAL_BW_GBPS ns.
+// both env vars read once on first call; no-op if both unset/zero.
+// preserves async overlap because the delay is launched as a cuda kernel on the
+// same stream as the NCCL op it models.
+void maybe_penalize_internode(cudaStream_t stream, long bytes);
+
 
 
 /** A common interface for the thread function that runs the ring algorithm for a rank.
@@ -80,6 +92,7 @@ typedef void (*RingRunFunc)(RunArgs* args);
 // void ring_nccl(RunArgs* args);
 void ring_naive(RunArgs* args);
 void ring_pipelined_nccl(RunArgs* args);
+void ring_hierarchical(RunArgs* args);
 // void ring_pipelined_async(RunArgs* args);
 void halving_doubling_allreduce(RunArgs* args);
 void halving_doubling_pipelined(RunArgs* args);

@@ -1,6 +1,7 @@
 // utils.cu
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/time.h>
 
 #include "interface.h"
@@ -48,6 +49,41 @@ double get_time() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec * 1e6 + (double)tv.tv_usec;
+}
+
+// in-stream delay: one thread spins on __nanosleep so the penalty is enqueued
+// on the CUDA stream alongside NCCL ops. preserves async overlap between
+// compute and comm streams (unlike a host-side usleep which would require a
+// cudaStreamSynchronize and serialize everything).
+// __nanosleep caps at ~1 ms per call on sm_70+, so we chunk.
+__global__ void delay_kernel(long total_ns) {
+    const unsigned int chunk_ns = 100000;  // 100 us per __nanosleep call
+    long remaining = total_ns;
+    while (remaining > 0) {
+        unsigned int s = remaining > chunk_ns ? chunk_ns : (unsigned int)remaining;
+        __nanosleep(s);
+        remaining -= s;
+    }
+}
+
+void maybe_penalize_internode(cudaStream_t stream, long bytes) {
+    // read penalty once, cache in statics (all ranks read the same env vars)
+    static long penalty_us = -1;           // GLOBAL_PENALTY_US:  fixed-latency component (us)
+    static double inv_bw_ns_per_byte = -1; // derived from GLOBAL_BW_GBPS: 1 B / 1 GB/s = 1 ns/B
+    if (penalty_us < 0) {
+        const char* env = getenv("GLOBAL_PENALTY_US");
+        penalty_us = (env && env[0] != '\0') ? atol(env) : 0;
+
+        const char* bw_env = getenv("GLOBAL_BW_GBPS");
+        double bw_gbps = (bw_env && bw_env[0] != '\0') ? atof(bw_env) : 0.0;
+        inv_bw_ns_per_byte = (bw_gbps > 0.0) ? (1.0 / bw_gbps) : 0.0;
+    }
+
+    long total_ns = penalty_us * 1000L
+                  + (long)(inv_bw_ns_per_byte * (double)bytes);
+    if (total_ns <= 0) return;
+
+    delay_kernel<<<1, 1, 0, stream>>>(total_ns);
 }
 
 void analyze_runtime(RunArgs* args, double* deltas) {
