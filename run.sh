@@ -1,4 +1,8 @@
 #!/bin/bash
+# default topology: 2 nodes x 4 GPUs = 8 ranks. good for ring / hierarchical / HD.
+# PAARD requires 2 GPUs/node and n_ranks=6 — for PAARD runs, change the three
+# SBATCH directives below to `--nodes=3 --ntasks-per-node=2 --gres=gpu:2` and
+# set N_RANKS=6. PAARD is skipped automatically if n_ranks != 6.
 #SBATCH --job-name=allreduce_bench
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
@@ -12,12 +16,18 @@
 #SBATCH --error=results/bench_%j.err
 
 DEBUG="on"
+N_RANKS=8
 
 for arg in "$@"; do
     case $arg in
         -r)
             echo "Running in Release Mode"
             DEBUG="off"
+            shift
+            ;;
+        -n=*)
+            N_RANKS="${arg#*-n=}"
+            shift
             ;;
     esac
 done
@@ -67,4 +77,4 @@ module load cudatoolkit
 module load cray-mpich
 module load nccl
 
-srun -u --cpus-per-task=32 --cpu-bind=cores ./benchmark
+srun -u --cpus-per-task=32 --cpu-bind=cores ./benchmark "$N_RANKS"

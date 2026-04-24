@@ -18,12 +18,6 @@ static std::pair<long, long> get_offset(int step, int rank, int n_ranks, long ch
     return {send_chunk * chunk_size, recv_chunk * chunk_size};
 }
 
-// element-wise add kernel: dest[i + offset] += src[i]
-static __global__ void add_kernel(float* dest, const float* src, long offset, long n) {
-    long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) dest[offset + idx] += src[idx];
-}
-
 // ring all-reduce using RS + AG.
 // rank_to_node: if non-null, steps where this rank's ring neighbors live on a
 // different node incur a synthetic inter-node penalty via maybe_penalize_internode

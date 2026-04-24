@@ -4,8 +4,8 @@
 
 ```shell
 cd $PSCRATCH/async-ring-allreduce/
-./build.sh          # compile, optionally pass -r to build in release mode
-sbatch ./run.sh     # run, modify node count before running
+./build.sh       # compile, optionally pass -r to build in release mode
+sbatch ./run.sh  # run, optionally pass -r to run in release mode, and -n=N_RANKS to run with N_RANKS ranks
 ```
 
 ## Implementations

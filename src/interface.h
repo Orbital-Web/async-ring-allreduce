@@ -55,6 +55,9 @@ typedef struct {
 // initialize buf[i] = 100*rank + 100*i/input_size
 __global__ void init_input_kernel(float* buf, int rank, long input_size);
 
+// element-wise add kernel: dest[i + offset] += src[i]
+__global__ void add_kernel(float* dest, const float* src, long offset, long n);
+
 // verify output[i] = 100*0 + 100*1 + ... 100*(n_ranks-1) + n_ranks*100*i/input_size
 bool check_correctness(float* h_res, int rank, int n_ranks, long input_size, float atol);
 
@@ -86,8 +89,11 @@ typedef void (*RingRunFunc)(RunArgs* args);
 
 
 // TODO: add new implementations here
-void ring_nccl(RunArgs* args);
+// void ring_nccl(RunArgs* args);
 void ring_naive(RunArgs* args);
 void ring_pipelined_nccl(RunArgs* args);
 void ring_hierarchical(RunArgs* args);
 // void ring_pipelined_async(RunArgs* args);
+void halving_doubling_allreduce(RunArgs* args);
+void halving_doubling_pipelined(RunArgs* args);
+void paard_nccl(RunArgs* args);
