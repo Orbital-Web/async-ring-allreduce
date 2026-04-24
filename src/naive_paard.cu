@@ -73,14 +73,16 @@ static void paard_allreduce(
             d_outbuf, d_inbuf, input_size * sizeof(float), cudaMemcpyDeviceToDevice, stream
         ));
 
-
-    // --- STEP 1: INTERNAL REDUCE-SCATTER ---
-    long chunk_sz = (input_size + n_groups - 1) / n_groups;
-    long chunk_szl = (input_size % chunk_sz == 0) ? chunk_sz : input_size % chunk_sz;
+    // determine chunk sizes and allocate temporary buffer
+    assert(input_size % n_ranks == 0);
+    long chunk_sz = input_size / n_groups;
+    long sbchunk_sz = input_size / n_ranks;
 
     float* temp_buf = nullptr;
     CUDA_CALL(cudaMalloc(&temp_buf, chunk_sz * sizeof(float)));
 
+
+    // --- STEP 1: INTERNAL REDUCE-SCATTER ---
     int lr_send = group * group_size + (local_rank + 1) % group_size;
     int lr_recv = group * group_size + (local_rank - 1 + group_size) % group_size;
 
@@ -90,21 +92,18 @@ static void paard_allreduce(
         if (lch_send >= group) lch_send++;
         if (lch_recv >= group) lch_recv++;
 
-        long sz_send = (lch_send == n_groups - 1) ? chunk_szl : chunk_sz;
-        long sz_recv = (lch_recv == n_groups - 1) ? chunk_szl : chunk_sz;
-
         long off_send = lch_send * chunk_sz;
         long off_recv = lch_recv * chunk_sz;
 
         NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, sz_send, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, sz_recv, ncclFloat, lr_recv, comm, stream));
+        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, lr_send, comm, stream));
+        NCCL_CALL(ncclRecv(temp_buf, chunk_sz, ncclFloat, lr_recv, comm, stream));
         NCCL_CALL(ncclGroupEnd());
 
         // reduce
         const int threads = 256;
-        long blocks = (sz_recv + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, sz_recv);
+        long blocks = (chunk_sz + threads - 1) / threads;
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, chunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
@@ -117,48 +116,39 @@ static void paard_allreduce(
     int gch_recv = group;
 
     {
-        long sz_send = (gch_send == n_groups - 1) ? chunk_szl : chunk_sz;
-        long sz_recv = (gch_recv == n_groups - 1) ? chunk_szl : chunk_sz;
-
         long off_send = gch_send * chunk_sz;
         long off_recv = gch_recv * chunk_sz;
 
         NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, sz_send, ncclFloat, gr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, sz_recv, ncclFloat, gr_recv, comm, stream));
+        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, gr_send, comm, stream));
+        NCCL_CALL(ncclRecv(temp_buf, chunk_sz, ncclFloat, gr_recv, comm, stream));
         NCCL_CALL(ncclGroupEnd());
 
         // reduce
         const int threads = 256;
-        long blocks = (sz_recv + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, sz_recv);
+        long blocks = (chunk_sz + threads - 1) / threads;
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, chunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
 
     // --- STEP 3: INTERNAL REDUCE-SCATTER ---
-    long sbchunk_sz = (input_size + n_ranks - 1) / n_ranks;
-    long sbchunk_szl = (input_size % sbchunk_sz == 0) ? sbchunk_sz : input_size % sbchunk_sz;
-
     {
         int lsbch_send = (rank + 1) % group_size + group * group_size;
         int lsbch_recv = rank % group_size + group * group_size;
-
-        long sz_send = (lsbch_send == n_ranks - 1) ? sbchunk_szl : sbchunk_sz;
-        long sz_recv = (lsbch_recv == n_ranks - 1) ? sbchunk_szl : sbchunk_sz;
 
         long off_send = lsbch_send * sbchunk_sz;
         long off_recv = lsbch_recv * sbchunk_sz;
 
         NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, sz_send, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, sz_recv, ncclFloat, lr_recv, comm, stream));
+        NCCL_CALL(ncclSend(d_outbuf + off_send, sbchunk_sz, ncclFloat, lr_send, comm, stream));
+        NCCL_CALL(ncclRecv(temp_buf, sbchunk_sz, ncclFloat, lr_recv, comm, stream));
         NCCL_CALL(ncclGroupEnd());
 
         // reduce
         const int threads = 256;
-        long blocks = (sz_recv + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, sz_recv);
+        long blocks = (sbchunk_sz + threads - 1) / threads;
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, sbchunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
