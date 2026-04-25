@@ -11,12 +11,19 @@
 
 
 // helper functions to get send and recv chunk offsets
-static std::pair<long, long> get_offset(
+static std::pair<long, long> get_offset_rs(
     int step, int rank, int n_chunks, int n_batches, long chunk_size
 ) {
-    assert(step >= 0 && step < 2 * (n_chunks - n_batches));
+    assert(step >= 0 && step < n_chunks - n_batches);
     long send_chunk = (2 * n_chunks - 1 + rank * n_batches - step) % n_chunks;
     long recv_chunk = (2 * n_chunks - 1 - n_batches + rank * n_batches - step) % n_chunks;
+    return {send_chunk * chunk_size, recv_chunk * chunk_size};
+}
+
+static std::pair<long, long> get_offset_ag(int step, int rank, int n_ranks, long chunk_size) {
+    assert(step >= 0 && step < n_ranks - 1);
+    long send_chunk = (n_ranks - 0 + rank - step) % n_ranks;
+    long recv_chunk = (n_ranks - 1 + rank - step) % n_ranks;
     return {send_chunk * chunk_size, recv_chunk * chunk_size};
 }
 
@@ -50,7 +57,7 @@ static void ring_allreduce(
     int next_rank = (rank + 1) % n_ranks;
     int prev_rank = (rank - 1 + n_ranks) % n_ranks;
 
-    auto [send_off, recv_off] = get_offset(0, rank, n_chunks, n_batches, chunk_size);
+    auto [send_off, recv_off] = get_offset_rs(0, rank, n_chunks, n_batches, chunk_size);
     NCCL_CALL(ncclGroupStart());
     NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0]));
     NCCL_CALL(ncclRecv(temp_bufs[0], chunk_size, ncclFloat, prev_rank, comm, streams[0]));
@@ -65,7 +72,7 @@ static void ring_allreduce(
         );
         CUDA_CALL(cudaGetLastError());
 
-        std::tie(send_off, recv_off) = get_offset(step, rank, n_chunks, n_batches, chunk_size);
+        std::tie(send_off, recv_off) = get_offset_rs(step, rank, n_chunks, n_batches, chunk_size);
         NCCL_CALL(ncclGroupStart());
         NCCL_CALL(
             ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[step % 2])
@@ -78,24 +85,17 @@ static void ring_allreduce(
         // CUDA_CALL(cudaStreamSynchronize(streams[(step + 1) % 2]));
     }
 
-    // reduce (happens concurrently with first all gather)
+    // last reduce
     const int threads = 256;
     long blocks = (chunk_size + threads - 1) / threads;
     add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf, temp_bufs[1], recv_off, chunk_size);
     CUDA_CALL(cudaGetLastError());
+    CUDA_CALL(cudaStreamSynchronize(streams[1]));
 
     // --- ALL-GATHER ---
-    std::tie(send_off, recv_off)
-        = get_offset(n_chunks - n_batches, rank, n_chunks, n_batches, chunk_size);
-    NCCL_CALL(ncclGroupStart());
-    NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0]));
-    NCCL_CALL(ncclRecv(d_outbuf + recv_off, chunk_size, ncclFloat, prev_rank, comm, streams[0]));
-    NCCL_CALL(ncclGroupEnd());
-
-    // CUDA_CALL(cudaStreamSynchronize(streams[1]));
-
-    for (int step = n_chunks - n_batches + 1; step < 2 * (n_chunks - n_batches); step++) {
-        std::tie(send_off, recv_off) = get_offset(step, rank, n_chunks, n_batches, chunk_size);
+    chunk_size = input_size / n_ranks;
+    for (int step = 0; step < n_ranks - 1; step++) {
+        std::tie(send_off, recv_off) = get_offset_ag(step, rank, n_ranks, chunk_size);
         NCCL_CALL(ncclGroupStart());
         NCCL_CALL(
             ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0])
