@@ -20,7 +20,7 @@ module load cray-mpich
 module load nccl
 
 # TODO: add new impls here
-nvcc -o benchmark \
+nvcc -arch=sm_80 -o benchmark \
     src/benchmark.cu src/utils.cu \
     src/naive_ring.cu \
     src/pipelined_ring_nccl.cu \
