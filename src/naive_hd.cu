@@ -55,13 +55,12 @@ static void hd_allreduce_impl(
         long kept_off = kept_chunk * chunk_size;
         long sent_off = sent_chunk * chunk_size;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + sent_off, half_size, ncclFloat, partner, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, half_size, ncclFloat, partner, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + sent_off, temp_buf, half_size, rank, partner, partner, comm, stream
+        );
 
         long blocks = (half_size + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, half_size, kept_off);
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf + kept_off, temp_buf, half_size);
         CUDA_CALL(cudaGetLastError());
     }
 
@@ -75,10 +74,16 @@ static void hd_allreduce_impl(
         long my_off = (long)(rank & ~(mask_bit - 1)) * chunk_size;
         long partner_off = (long)(partner & ~(mask_bit - 1)) * chunk_size;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + my_off, block_size, ncclFloat, partner, comm, stream));
-        NCCL_CALL(ncclRecv(d_outbuf + partner_off, block_size, ncclFloat, partner, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + my_off,
+            d_outbuf + partner_off,
+            block_size,
+            rank,
+            partner,
+            partner,
+            comm,
+            stream
+        );
     }
 
     CUDA_CALL(cudaStreamSynchronize(stream));

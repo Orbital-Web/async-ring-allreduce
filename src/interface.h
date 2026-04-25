@@ -50,8 +50,19 @@ typedef struct {
 // initialize buf[i] = 100*rank + 100*i/input_size
 __global__ void init_input_kernel(float* buf, int rank, long input_size);
 
-// element-wise add kernel: dest[i + offset] += src[i]
-__global__ void add_kernel(float* dest, const float* src, long offset, long n);
+// element-wise add kernel: dest[i] += src[i]
+__global__ void add_kernel(float* dest, const float* src, long n);
+
+void ncclSendRecv(
+    float* send_buf,
+    float* recv_buf,
+    size_t buf_sz,
+    int rank,
+    int send_rank,
+    int recv_rank,
+    ncclComm_t comm,
+    cudaStream_t stream
+);
 
 // verify output[i] = 100*0 + 100*1 + ... 100*(n_ranks-1) + n_ranks*100*i/input_size
 bool check_correctness(float* h_res, int rank, int n_ranks, long input_size, float atol);

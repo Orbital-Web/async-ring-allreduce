@@ -100,7 +100,7 @@ static void ring_allreduce(
         const int threads = 256;
         long blocks = (chunk_size + threads - 1) / threads;
         add_kernel<<<blocks, threads, 0, streams[(step + 1) % 2]>>>(
-            d_outbuf, temp_bufs[(step + 1) % 2], recv_off, chunk_size
+            d_outbuf + recv_off, temp_bufs[(step + 1) % 2], chunk_size
         );
         CUDA_CALL(cudaGetLastError());
 
@@ -120,7 +120,7 @@ static void ring_allreduce(
     // final reduce (happens concurrently with first all gather)
     const int threads = 256;
     long blocks = (chunk_size + threads - 1) / threads;
-    add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf, temp_bufs[1], recv_off, chunk_size);
+    add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf + recv_off, temp_bufs[1], chunk_size);
     CUDA_CALL(cudaGetLastError());
 
     // --- ALL-GATHER ---

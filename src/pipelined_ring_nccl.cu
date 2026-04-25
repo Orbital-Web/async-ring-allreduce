@@ -58,29 +58,30 @@ static void ring_allreduce(
     int prev_rank = (rank - 1 + n_ranks) % n_ranks;
 
     auto [send_off, recv_off] = get_offset_rs(0, rank, n_chunks, n_batches, chunk_size);
-    NCCL_CALL(ncclGroupStart());
-    NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0]));
-    NCCL_CALL(ncclRecv(temp_bufs[0], chunk_size, ncclFloat, prev_rank, comm, streams[0]));
-    NCCL_CALL(ncclGroupEnd());
+    ncclSendRecv(
+        d_outbuf + send_off, temp_bufs[0], chunk_size, rank, next_rank, prev_rank, comm, streams[0]
+    );
 
     for (int step = 1; step < n_chunks - n_batches; step++) {
         // reduce
         const int threads = 256;
         long blocks = (chunk_size + threads - 1) / threads;
         add_kernel<<<blocks, threads, 0, streams[(step + 1) % 2]>>>(
-            d_outbuf, temp_bufs[(step + 1) % 2], recv_off, chunk_size
+            d_outbuf + recv_off, temp_bufs[(step + 1) % 2], chunk_size
         );
         CUDA_CALL(cudaGetLastError());
 
         std::tie(send_off, recv_off) = get_offset_rs(step, rank, n_chunks, n_batches, chunk_size);
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(
-            ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[step % 2])
+        ncclSendRecv(
+            d_outbuf + send_off,
+            temp_bufs[step % 2],
+            chunk_size,
+            rank,
+            next_rank,
+            prev_rank,
+            comm,
+            streams[step % 2]
         );
-        NCCL_CALL(
-            ncclRecv(temp_bufs[step % 2], chunk_size, ncclFloat, prev_rank, comm, streams[step % 2])
-        );
-        NCCL_CALL(ncclGroupEnd());
 
         // CUDA_CALL(cudaStreamSynchronize(streams[(step + 1) % 2]));
     }
@@ -88,7 +89,7 @@ static void ring_allreduce(
     // last reduce
     const int threads = 256;
     long blocks = (chunk_size + threads - 1) / threads;
-    add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf, temp_bufs[1], recv_off, chunk_size);
+    add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf + recv_off, temp_bufs[1], chunk_size);
     CUDA_CALL(cudaGetLastError());
     CUDA_CALL(cudaStreamSynchronize(streams[1]));
 
@@ -96,14 +97,16 @@ static void ring_allreduce(
     chunk_size = input_size / n_ranks;
     for (int step = 0; step < n_ranks - 1; step++) {
         std::tie(send_off, recv_off) = get_offset_ag(step, rank, n_ranks, chunk_size);
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(
-            ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, streams[0])
+        ncclSendRecv(
+            d_outbuf + send_off,
+            d_outbuf + recv_off,
+            chunk_size,
+            rank,
+            next_rank,
+            prev_rank,
+            comm,
+            streams[0]
         );
-        NCCL_CALL(
-            ncclRecv(d_outbuf + recv_off, chunk_size, ncclFloat, prev_rank, comm, streams[0])
-        );
-        NCCL_CALL(ncclGroupEnd());
     }
 
     CUDA_CALL(cudaStreamSynchronize(streams[0]));

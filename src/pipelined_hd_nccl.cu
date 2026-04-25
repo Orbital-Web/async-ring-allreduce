@@ -81,16 +81,20 @@ static void hd_pipelined_impl(
             long sub_sent = sent_off + (long)b * sub_half;
             long sub_kept = kept_off + (long)b * sub_half;
 
-            NCCL_CALL(ncclGroupStart());
-            NCCL_CALL(
-                ncclSend(d_outbuf + sub_sent, sub_half, ncclFloat, partner, comm, streams[b])
+            ncclSendRecv(
+                d_outbuf + sub_sent,
+                temp_bufs[b],
+                sub_half,
+                rank,
+                partner,
+                partner,
+                comm,
+                streams[b]
             );
-            NCCL_CALL(ncclRecv(temp_bufs[b], sub_half, ncclFloat, partner, comm, streams[b]));
-            NCCL_CALL(ncclGroupEnd());
 
             long blocks = (sub_half + threads - 1) / threads;
             add_kernel<<<blocks, threads, 0, streams[b]>>>(
-                d_outbuf, temp_bufs[b], sub_half, sub_kept
+                d_outbuf + sub_kept, temp_bufs[b], sub_half
             );
             CUDA_CALL(cudaGetLastError());
         }
@@ -116,12 +120,16 @@ static void hd_pipelined_impl(
             long my_b = my_off + (long)b * sub_block;
             long partner_b = partner_off + (long)b * sub_block;
 
-            NCCL_CALL(ncclGroupStart());
-            NCCL_CALL(ncclSend(d_outbuf + my_b, sub_block, ncclFloat, partner, comm, streams[b]));
-            NCCL_CALL(
-                ncclRecv(d_outbuf + partner_b, sub_block, ncclFloat, partner, comm, streams[b])
+            ncclSendRecv(
+                d_outbuf + my_b,
+                d_outbuf + partner_b,
+                sub_block,
+                rank,
+                partner,
+                partner,
+                comm,
+                streams[b]
             );
-            NCCL_CALL(ncclGroupEnd());
         }
 
         CUDA_CALL(cudaEventRecord(events[0], streams[0]));

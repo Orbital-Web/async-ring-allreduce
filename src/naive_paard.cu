@@ -95,15 +95,11 @@ static void paard_allreduce(
         long off_send = lch_send * chunk_sz;
         long off_recv = lch_recv * chunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, chunk_sz, ncclFloat, lr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(d_outbuf + off_send, temp_buf, chunk_sz, rank, lr_send, lr_recv, comm, stream);
 
-        // reduce
         const int threads = 256;
         long blocks = (chunk_sz + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, chunk_sz);
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf + off_recv, temp_buf, chunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
@@ -119,15 +115,11 @@ static void paard_allreduce(
         long off_send = gch_send * chunk_sz;
         long off_recv = gch_recv * chunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, gr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, chunk_sz, ncclFloat, gr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(d_outbuf + off_send, temp_buf, chunk_sz, rank, gr_send, gr_recv, comm, stream);
 
-        // reduce
         const int threads = 256;
         long blocks = (chunk_sz + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, chunk_sz);
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf + off_recv, temp_buf, chunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
@@ -140,15 +132,14 @@ static void paard_allreduce(
         long off_send = lsbch_send * sbchunk_sz;
         long off_recv = lsbch_recv * sbchunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, sbchunk_sz, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(temp_buf, sbchunk_sz, ncclFloat, lr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + off_send, temp_buf, sbchunk_sz, rank, lr_send, lr_recv, comm, stream
+        );
 
         // reduce
         const int threads = 256;
         long blocks = (sbchunk_sz + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, off_recv, sbchunk_sz);
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf + off_recv, temp_buf, sbchunk_sz);
         CUDA_CALL(cudaGetLastError());
     }
 
@@ -160,10 +151,16 @@ static void paard_allreduce(
         long off_send = lsbch_send * sbchunk_sz;
         long off_recv = lsbch_recv * sbchunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, sbchunk_sz, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(d_outbuf + off_recv, sbchunk_sz, ncclFloat, lr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + off_send,
+            d_outbuf + off_recv,
+            sbchunk_sz,
+            rank,
+            lr_send,
+            lr_recv,
+            comm,
+            stream
+        );
     }
 
     // --- STEP 5: GLOBAL GATHER ---
@@ -174,10 +171,9 @@ static void paard_allreduce(
         long off_send = gch_send * chunk_sz;
         long off_recv = gch_recv * chunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, gr_send, comm, stream));
-        NCCL_CALL(ncclRecv(d_outbuf + off_recv, chunk_sz, ncclFloat, gr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + off_send, d_outbuf + off_recv, chunk_sz, rank, gr_send, gr_recv, comm, stream
+        );
     }
 
     // --- STEP 6: INTERNAL ALL-GATHER ---
@@ -190,10 +186,9 @@ static void paard_allreduce(
         long off_send = lch_send * chunk_sz;
         long off_recv = lch_recv * chunk_sz;
 
-        NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(d_outbuf + off_send, chunk_sz, ncclFloat, lr_send, comm, stream));
-        NCCL_CALL(ncclRecv(d_outbuf + off_recv, chunk_sz, ncclFloat, lr_recv, comm, stream));
-        NCCL_CALL(ncclGroupEnd());
+        ncclSendRecv(
+            d_outbuf + off_send, d_outbuf + off_recv, chunk_sz, rank, lr_send, lr_recv, comm, stream
+        );
     }
 
     CUDA_CALL(cudaStreamSynchronize(stream));
