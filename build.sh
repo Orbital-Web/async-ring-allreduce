@@ -27,6 +27,7 @@ nvcc -arch=sm_80 -o benchmark \
     src/naive_hd.cu \
     src/pipelined_hd_nccl.cu \
     src/naive_paard.cu \
+    src/pipelined_paard.cu \
     -I${NCCL_HOME}/include -L${NCCL_HOME}/lib \
     -I${CRAY_MPICH_PREFIX}/include -L${CRAY_MPICH_PREFIX}/lib \
     -lnccl \

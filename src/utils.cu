@@ -12,6 +12,7 @@ __global__ void init_input_kernel(float* buf, int rank, long input_size) {
 
 __global__ void add_kernel(float* dest, const float* src, long n) {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    __nanosleep(5000);  // simulate "more work"
     if (idx < n) dest[idx] += src[idx];
 }
 

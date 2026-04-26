@@ -14,6 +14,7 @@
 
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
+    paard_pipelined_nccl,
     paard_nccl,
     ring_pipelined_nccl,
     ring_naive,
@@ -22,6 +23,7 @@ static RingRunFunc impls[] = {
 };
 
 static const char* impl_names[] = {
+    "Pipelined Paard",
     "Classic Paard",
     "Pipelined Ring",
     "Classic Ring",
@@ -121,7 +123,7 @@ int main(int argc, char** argv) {
         const auto impl = impls[i];
         const auto& impl_name = impl_names[i];
 
-        if (!use_paard && impl == paard_nccl) continue;
+        if (!use_paard && (impl == paard_nccl || impl == paard_pipelined_nccl)) continue;
         if (!use_tree && (impl == halving_doubling_allreduce || impl == halving_doubling_pipelined))
             continue;
 
