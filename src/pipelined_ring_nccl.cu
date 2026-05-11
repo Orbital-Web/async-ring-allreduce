@@ -171,14 +171,14 @@ void ring_pipelined_nccl(RunArgs* args) {
 
     // warmup
     for (int i = 0; i < args->n_warmup; i++)
-        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
 
 
     // benchmark
     double* deltas = (double*)malloc(args->n_iters * sizeof(double));
     for (int i = 0; i < args->n_iters; i++) {
         double t0 = get_time();
-        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
         double t1 = get_time();
         deltas[i] = t1 - t0;
     }
