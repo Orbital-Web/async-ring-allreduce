@@ -22,6 +22,9 @@ Sweep example:
 
 ```shell
 ALLREDUCE_B=4 ALLREDUCE_COMPUTE_NS=8000 ALLREDUCE_INTER_US=50 sbatch run.sh -r
+
+# 8-way job (HD + Ring): use ./run_8r.sh (8 GPUs allocated)
+sbatch ./run_8r.sh -r
 ```
 
 Older names still work as fallbacks in code only: `ALLREDUCE_N_BATCHES`, `ALLREDUCE_REDUCE_NS`.
