@@ -161,6 +161,7 @@ INTER_SPECS_8R = [
     ("baseline", "8r_baseline.csv"),
     ("inter 0 µs (hw)", "8r_inter_0us_hwonly.csv"),
     ("inter 50 µs", "8r_inter_50us.csv"),
+    ("inter 100 µs", "8r_inter_100us.csv"),
     ("inter 500 µs", "8r_inter_500us.csv"),
 ]
 BATCH_SPECS_8R = [
@@ -448,8 +449,7 @@ def main() -> int:
             )
 
     print(
-        "\nNote: 8r inter sweep expects 8r_inter_50us.csv and 8r_inter_500us.csv if you "
-        "ran those experiments; missing files are skipped with a warning. "
+        "\nNote: missing inter-delay CSVs are skipped with a warning (8r: e.g. 50/100/500 µs files). "
         "Batch sweeps require B4/B8 CSVs (e.g. 8r_B4.csv) — add runs or symlinks if missing.",
     )
     return 0
