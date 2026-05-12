@@ -6,11 +6,7 @@
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-#include <string>
-
-#include "interface.h"
-
+#include <string.h>
 
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
@@ -106,6 +102,10 @@ int main(int argc, char** argv) {
         if (sweep_n_batches < 2) sweep_n_batches = 2;
     }
 
+    const char* stack_env = getenv("ALLREDUCE_BENCH_STACK");
+    const bool want_stack_breakdown =
+        stack_env && stack_env[0] != '\0' && strcmp(stack_env, "0") != 0;
+
     // get NCCL Unique ID from rank 0
     ncclUniqueId id;
     if (rank == 0) NCCL_CALL(ncclGetUniqueId(&id));
@@ -115,11 +115,18 @@ int main(int argc, char** argv) {
     ncclComm_t comm;
     NCCL_CALL(ncclCommInitRank(&comm, n_ranks, id, rank));
 
-    if (rank == 0)
-        printf(
-            "impl,input_size,input_bytes,avg_latency,std_latency,min_latency,max_latency,"
-            "throughput\n"
-        );
+    if (rank == 0) {
+        if (want_stack_breakdown)
+            printf(
+                "impl,input_size,input_bytes,avg_latency,std_latency,min_latency,max_latency,"
+                "stack_comm_us,stack_compute_us,throughput\n"
+            );
+        else
+            printf(
+                "impl,input_size,input_bytes,avg_latency,std_latency,min_latency,max_latency,"
+                "throughput\n"
+            );
+    }
 
     const int n_warmup = 200;
     const int n_iters = 200;
@@ -145,6 +152,9 @@ int main(int argc, char** argv) {
             double local_max = 0.0;
             bool local_correct = 0;
 
+            double local_stack_comm = 0.0;
+            double local_stack_compute = 0.0;
+
             RunArgs args;
             args.input_size = input_size;
             args.comm = comm;
@@ -157,6 +167,13 @@ int main(int argc, char** argv) {
             args.std_latency = &local_std;
             args.min_latency = &local_min;
             args.max_latency = &local_max;
+            if (want_stack_breakdown) {
+                args.bench_avg_comm_us = &local_stack_comm;
+                args.bench_avg_compute_us = &local_stack_compute;
+            } else {
+                args.bench_avg_comm_us = nullptr;
+                args.bench_avg_compute_us = nullptr;
+            }
 
             // run the impl
             impl(&args);
@@ -180,19 +197,57 @@ int main(int argc, char** argv) {
             MPI_Reduce(&local_min, &global_min, 1, MPI_DOUBLE, MPI_MAX, 0, active_comm);
             MPI_Reduce(&local_max, &global_max, 1, MPI_DOUBLE, MPI_MAX, 0, active_comm);
 
+            double global_stack_comm = 0.0;
+            double global_stack_compute = 0.0;
+            if (want_stack_breakdown) {
+                MPI_Reduce(
+                    &local_stack_comm,
+                    &global_stack_comm,
+                    1,
+                    MPI_DOUBLE,
+                    MPI_MAX,
+                    0,
+                    active_comm
+                );
+                MPI_Reduce(
+                    &local_stack_compute,
+                    &global_stack_compute,
+                    1,
+                    MPI_DOUBLE,
+                    MPI_MAX,
+                    0,
+                    active_comm
+                );
+            }
+
             if (rank == 0) {
                 double throughput = n_bytes / global_avg;
-                printf(
-                    "%s,%lu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                    impl_name,
-                    input_size,
-                    n_bytes,
-                    global_avg,
-                    global_std,
-                    global_min,
-                    global_max,
-                    throughput
-                );
+                if (want_stack_breakdown)
+                    printf(
+                        "%s,%ld,%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                        impl_name,
+                        input_size,
+                        n_bytes,
+                        global_avg,
+                        global_std,
+                        global_min,
+                        global_max,
+                        global_stack_comm,
+                        global_stack_compute,
+                        throughput
+                    );
+                else
+                    printf(
+                        "%s,%ld,%zu,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                        impl_name,
+                        input_size,
+                        n_bytes,
+                        global_avg,
+                        global_std,
+                        global_min,
+                        global_max,
+                        throughput
+                    );
             }
         }
     }

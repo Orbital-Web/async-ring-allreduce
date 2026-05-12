@@ -30,6 +30,19 @@
 
 static constexpr int MAX_RANKS = 4;
 
+/** Optional GPU-interval accumulation for stacked comm vs compute bars (-- env ALLREDUCE_BENCH_STACK).
+ * Serialized (sync per bracket): valid for fractions of wall time, not for overlapped CUDA streams.
+ */
+typedef struct BenchStackAccum {
+    cudaEvent_t comm0;
+    cudaEvent_t comm1;
+    cudaEvent_t comp0;
+    cudaEvent_t comp1;
+    int inited;
+    double sum_comm_ms;
+    double sum_compute_ms;
+} BenchStackAccum;
+
 typedef struct {
     // all-reduce arguments
     long input_size;
@@ -45,6 +58,9 @@ typedef struct {
     double* std_latency;
     double* min_latency;
     double* max_latency;
+    /** If non-NULL (stack benchmark mode): implementations fill with mean GPU ms per timed iteration across steps. */
+    double* bench_avg_comm_us;
+    double* bench_avg_compute_us;
 } RunArgs;
 
 
@@ -57,6 +73,13 @@ __global__ void add_kernel(float* dest, const float* src, long n);
 
 /** Read env knobs for add_kernel sleep, inter-node sim delay, etc. Call once per MPI rank after cudaSetDevice. */
 void init_benchmark_knob_from_env(void);
+
+void bench_accum_init(BenchStackAccum* b);
+void bench_accum_destroy(BenchStackAccum* b);
+void bench_stack_reset(BenchStackAccum* b);
+void bench_stack_attach(BenchStackAccum* b);
+void bench_stack_detach(void);
+void bench_launch_add(long blocks, int threads, cudaStream_t stream, float* dest, const float* src, long n);
 
 void ncclSendRecv(
     float* send_buf,

@@ -80,25 +80,27 @@ static void hd_pipelined_impl(
             CUDA_CALL(cudaStreamWaitEvent(streams[1], events[0], 0));
         }
 
-        // issue batches on alternating streams (intra-step pipelining)
+        // issue batches on alternating streams (intra-step pipelining).
+        // Only two CUDA streams exist; map batch index b -> b % 2.
         for (int b = 0; b < n_batches; b++) {
             long sub_sent = sent_off + (long)b * sub_half;
             long sub_kept = kept_off + (long)b * sub_half;
 
+            const int sb = b % 2;
             ncclSendRecv(
                 d_outbuf + sub_sent,
-                temp_bufs[b],
+                temp_bufs[sb],
                 sub_half,
                 rank,
                 partner,
                 partner,
                 comm,
-                streams[b]
+                streams[sb]
             );
 
             long blocks = (sub_half + threads - 1) / threads;
-            add_kernel<<<blocks, threads, 0, streams[b]>>>(
-                d_outbuf + sub_kept, temp_bufs[b], sub_half
+            add_kernel<<<blocks, threads, 0, streams[sb]>>>(
+                d_outbuf + sub_kept, temp_bufs[sb], sub_half
             );
             CUDA_CALL(cudaGetLastError());
         }
@@ -124,6 +126,7 @@ static void hd_pipelined_impl(
             long my_b = my_off + (long)b * sub_block;
             long partner_b = partner_off + (long)b * sub_block;
 
+            const int sb = b % 2;
             ncclSendRecv(
                 d_outbuf + my_b,
                 d_outbuf + partner_b,
@@ -132,7 +135,7 @@ static void hd_pipelined_impl(
                 partner,
                 partner,
                 comm,
-                streams[b]
+                streams[sb]
             );
         }
 

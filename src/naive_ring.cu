@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include <tuple>
 #include <utility>
 
 #include "interface.h"
@@ -43,7 +44,8 @@ static void ring_allreduce(
     int next_rank = (rank + 1) % n_ranks;
     int prev_rank = (rank - 1 + n_ranks) % n_ranks;
     for (int step = 0; step < n_ranks - 1; step++) {
-        auto [send_off, recv_off] = get_offset(step, rank, n_ranks, chunk_size);
+        long send_off, recv_off;
+        std::tie(send_off, recv_off) = get_offset(step, rank, n_ranks, chunk_size);
         ncclSendRecv(
             d_outbuf + send_off, temp_buf, chunk_size, rank, next_rank, prev_rank, comm, stream
         );
@@ -51,13 +53,14 @@ static void ring_allreduce(
         // reduce
         const int threads = 256;
         long blocks = (chunk_size + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf + recv_off, temp_buf, chunk_size);
+        bench_launch_add(blocks, threads, stream, d_outbuf + recv_off, temp_buf, chunk_size);
         CUDA_CALL(cudaGetLastError());
     }
 
     // --- ALL-GATHER ---
     for (int step = n_ranks - 1; step < 2 * (n_ranks - 1); step++) {
-        auto [send_off, recv_off] = get_offset(step, rank, n_ranks, chunk_size);
+        long send_off, recv_off;
+        std::tie(send_off, recv_off) = get_offset(step, rank, n_ranks, chunk_size);
         ncclSendRecv(
             d_outbuf + send_off,
             d_outbuf + recv_off,
@@ -129,12 +132,31 @@ void ring_naive(RunArgs* args) {
 
 
     // benchmark
+    const bool bench_stack = args->bench_avg_comm_us != nullptr && args->bench_avg_compute_us != nullptr;
+    BenchStackAccum stack{};
+    if (bench_stack) bench_accum_init(&stack);
+
     double* deltas = (double*)malloc(args->n_iters * sizeof(double));
     for (int i = 0; i < args->n_iters; i++) {
+        if (bench_stack) {
+            bench_stack_reset(&stack);
+            bench_stack_attach(&stack);
+        }
         double t0 = get_time();
         ring_allreduce(d_inbuf, d_outbuf, input_size, comm, stream);
         double t1 = get_time();
+        if (bench_stack) {
+            bench_stack_detach();
+            *(args->bench_avg_comm_us) += stack.sum_comm_ms;
+            *(args->bench_avg_compute_us) += stack.sum_compute_ms;
+        }
         deltas[i] = t1 - t0;
+    }
+    if (bench_stack) {
+        const int nit = args->n_iters;
+        *(args->bench_avg_comm_us) = (*(args->bench_avg_comm_us) / nit) * 1000.0;
+        *(args->bench_avg_compute_us) = (*(args->bench_avg_compute_us) / nit) * 1000.0;
+        bench_accum_destroy(&stack);
     }
     analyze_runtime(args, deltas);
     free(deltas);

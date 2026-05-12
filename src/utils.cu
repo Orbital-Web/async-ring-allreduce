@@ -1,10 +1,47 @@
 // utils.cu
 
+#include <cmath>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 
 #include "interface.h"
+
+static BenchStackAccum* g_tls_bs = nullptr;
+
+void bench_accum_init(BenchStackAccum* b) {
+    if (!b) return;
+    memset(b, 0, sizeof(BenchStackAccum));
+    CUDA_CALL(cudaEventCreate(&b->comm0));
+    CUDA_CALL(cudaEventCreate(&b->comm1));
+    CUDA_CALL(cudaEventCreate(&b->comp0));
+    CUDA_CALL(cudaEventCreate(&b->comp1));
+    b->inited = 1;
+}
+
+void bench_accum_destroy(BenchStackAccum* b) {
+    if (!b || !b->inited) return;
+    CUDA_CALL(cudaEventDestroy(b->comm0));
+    CUDA_CALL(cudaEventDestroy(b->comm1));
+    CUDA_CALL(cudaEventDestroy(b->comp0));
+    CUDA_CALL(cudaEventDestroy(b->comp1));
+    b->inited = 0;
+}
+
+void bench_stack_reset(BenchStackAccum* b) {
+    if (!b) return;
+    b->sum_comm_ms = 0.0;
+    b->sum_compute_ms = 0.0;
+}
+
+void bench_stack_attach(BenchStackAccum* b) {
+    g_tls_bs = b;
+}
+
+void bench_stack_detach(void) {
+    g_tls_bs = nullptr;
+}
 
 __constant__ unsigned int c_reduce_ns = 5000;
 /** 0: legacy proportional (buf_sz >> 8) ns; 1: fixed microseconds from ALLREDUCE_INTER_US */
@@ -45,6 +82,23 @@ __global__ void add_kernel(float* dest, const float* src, long n) {
     if (idx < n) dest[idx] += src[idx];
 }
 
+void bench_launch_add(
+    long blocks, int threads, cudaStream_t stream, float* dest, const float* src, long n
+) {
+    BenchStackAccum* bs = g_tls_bs;
+    if (!bs || !bs->inited) {
+        add_kernel<<<blocks, threads, 0, stream>>>(dest, src, n);
+        return;
+    }
+    CUDA_CALL(cudaEventRecord(bs->comp0, stream));
+    add_kernel<<<blocks, threads, 0, stream>>>(dest, src, n);
+    CUDA_CALL(cudaEventRecord(bs->comp1, stream));
+    CUDA_CALL(cudaStreamSynchronize(stream));
+    float ms = 0.f;
+    CUDA_CALL(cudaEventElapsedTime(&ms, bs->comp0, bs->comp1));
+    bs->sum_compute_ms += (double)ms;
+}
+
 __global__ void sim_latency_kernel(size_t buf_sz) {
     unsigned long long total =
         (c_inter_mode == 0u) ? ((unsigned long long)buf_sz >> 8u) : c_inter_fixed_ns;
@@ -62,19 +116,31 @@ void ncclSendRecv(
     ncclComm_t comm,
     cudaStream_t stream
 ) {
-    NCCL_CALL(ncclGroupStart());
-    NCCL_CALL(ncclSend(send_buf, buf_sz, ncclFloat, send_rank, comm, stream));
-    NCCL_CALL(ncclRecv(recv_buf, buf_sz, ncclFloat, recv_rank, comm, stream));
-    NCCL_CALL(ncclGroupEnd());
+    BenchStackAccum* bs = g_tls_bs;
 
     static constexpr int group_size = 2;
     const int group = rank / group_size;
     const int send_group = send_rank / group_size;
     const int recv_group = recv_rank / group_size;
 
+    if (bs && bs->inited) CUDA_CALL(cudaEventRecord(bs->comm0, stream));
+
+    NCCL_CALL(ncclGroupStart());
+    NCCL_CALL(ncclSend(send_buf, buf_sz, ncclFloat, send_rank, comm, stream));
+    NCCL_CALL(ncclRecv(recv_buf, buf_sz, ncclFloat, recv_rank, comm, stream));
+    NCCL_CALL(ncclGroupEnd());
+
     if (group != send_group || group != recv_group) {
         if (g_inter_mode_host != 1u || g_inter_fixed_ns_host != 0ull)
             sim_latency_kernel<<<1, 32, 0, stream>>>(buf_sz);
+    }
+
+    if (bs && bs->inited) {
+        CUDA_CALL(cudaEventRecord(bs->comm1, stream));
+        CUDA_CALL(cudaStreamSynchronize(stream));
+        float ms = 0.f;
+        CUDA_CALL(cudaEventElapsedTime(&ms, bs->comm0, bs->comm1));
+        bs->sum_comm_ms += (double)ms;
     }
 }
 
@@ -126,7 +192,7 @@ void analyze_runtime(RunArgs* args, double* deltas) {
         sum_std += (deltas[i] - avg_latency) * (deltas[i] - avg_latency);
 
     *(args->avg_latency) = avg_latency;
-    *(args->std_latency) = sqrt(sum_std / n_iters);
+    *(args->std_latency) = std::sqrt(sum_std / n_iters);
     *(args->min_latency) = min_latency;
     *(args->max_latency) = max_latency;
 }
