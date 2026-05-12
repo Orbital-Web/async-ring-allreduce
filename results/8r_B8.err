@@ -1,0 +1,9 @@
+Unloading the cpe module is insufficient to restore the system defaults.
+Please run 'source
+/opt/cray/pe/cpe/25.09/restore_lmod_system_defaults.[csh|sh]'. 
+ 
+Sourcing the above script is not necessary if swapping the cpe module with a
+different version. 
+Bench knobs (before srun): ALLREDUCE_B=8 ALLREDUCE_COMPUTE_NS=unset ALLREDUCE_INTER_US=unset ALLREDUCE_BENCH_STACK=unset N_RANKS=8
+[2026-05-12T16:23:02.800] error: *** STEP 52863611.0 ON nid001320 CANCELLED AT 2026-05-12T16:23:02 DUE TO TIME LIMIT ***
+[2026-05-12T16:23:02.801] error: *** JOB 52863611 ON nid001320 CANCELLED AT 2026-05-12T16:23:02 DUE TO TIME LIMIT ***

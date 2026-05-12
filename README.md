@@ -42,3 +42,9 @@ To add a new implementation, you will have to modify these files
 - `src/interface.h` containing the function signature for your implementation
 - `src/benchmark.cu` with `impls` and `impl_names` updated accordingly
 - `bench.sh` to compile with the newly created `your-impl.cu`
+
+
+
+ALLREDUCE_B=4 sbatch --output=results/8r_B4.csv --error=results/8r_B4.err ./run_8r.sh -r
+ 
+ALLREDUCE_B=8 sbatch --output=results/8r_B8.csv --error=results/8r_B8.err ./run_8r.sh -r
