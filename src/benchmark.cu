@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "interface.h"
+
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
     paard_pipelined_nccl,
