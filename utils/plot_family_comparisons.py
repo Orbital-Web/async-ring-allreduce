@@ -3,9 +3,13 @@
 Family-style sweep plots (poster-friendly):
 
 - **6r / 8r family layout**: four subplots (2×2) — Pipelined Ring, Classic Ring, then
-  Pipelined/Classic Paard (6r) or HD (8r). All **solid** lines; sweep/knob = color.
+  Pipelined/Classic Paard (6r) or HD (8r). **Baseline** curve is **dotted dark blue** on
+  every panel; **other sweeps** are **solid** in repeating **red, light blue, yellow,
+  light green**.
 
-Three comparison bundles — no point markers.
+  Panel **titles** use the teal / terracotta algo palette shared with ``utils/plot.py``.
+
+Three comparison bundles — sweep panels omit point markers; S-curves use filled circles.
 
 Examples:
     python utils/plot_family_comparisons.py --tier both --comparison all \\
@@ -26,6 +30,92 @@ import matplotlib.ticker as ticker
 import pandas as pd
 import seaborn as sns
 
+# --- Report-wide S-curve palette (also used by ``utils/plot.py``) -----------------
+RING = "Ring"
+HD = "HD"
+PAARD = "Paard"
+
+# S-curve / report palette: teal (Ring) vs terracotta (HD / Paard) — solid = Classic,
+# dotted = Pipelined, circular markers (aligned with manuscript figures).
+_FAMILY_COLOR: dict[str, str] = {
+    RING: "#52B8CC",
+    HD: "#D9735A",
+    PAARD: "#C4603C",
+}
+
+_FAMILY_MARKER: dict[str, str] = {
+    RING: "o",
+    HD: "o",
+    PAARD: "o",
+}
+
+
+def classify_impl(impl: str) -> tuple[str, str]:
+    """Return (family Ring|HD|Paard, variant Classic|Pipelined)."""
+    s = impl.strip().lower()
+    variant = "Pipelined" if s.startswith("pipelined ") else "Classic"
+    if variant == "Pipelined":
+        body = s.removeprefix("pipelined ").strip()
+    else:
+        body = s.removeprefix("classic ").strip()
+    body = body.strip()
+    if "paard" in body:
+        family = PAARD
+    elif body == "hd" or "halving" in body:
+        family = HD
+    else:
+        family = RING
+    return family, variant
+
+
+def family_color_for_impl(impl: str) -> str:
+    family, _ = classify_impl(impl)
+    return _FAMILY_COLOR[family]
+
+
+def _linestyle_for_variant(variant: str) -> str:
+    return ":" if variant == "Pipelined" else "-"
+
+
+def _linewidth_for_variant(variant: str) -> float:
+    return 2.6 if variant == "Classic" else 2.35
+
+
+def _zorder_for_variant(variant: str) -> int:
+    return 2 if variant == "Classic" else 3
+
+
+def plot_kw_for_impl(impl: str) -> dict:
+    """kwargs for matplotlib ``plot`` / S-curve figures for one CSV ``impl`` name."""
+    family, variant = classify_impl(impl)
+    return dict(
+        color=_FAMILY_COLOR[family],
+        linestyle=_linestyle_for_variant(variant),
+        linewidth=_linewidth_for_variant(variant),
+        marker=_FAMILY_MARKER[family],
+        markersize=6,
+        markeredgewidth=0.9,
+        markerfacecolor=_FAMILY_COLOR[family],
+        markeredgecolor="white",
+        label=impl,
+        zorder=_zorder_for_variant(variant),
+    )
+
+
+def sort_impl_labels(labels: list[str]) -> list[str]:
+    """Legend order: Ring (Classic, Pipelined), HD, Paard."""
+    fam_order = {RING: 0, HD: 1, PAARD: 2}
+    var_order = {"Classic": 0, "Pipelined": 1}
+
+    def key(lbl: str) -> tuple[int, int, str]:
+        f, v = classify_impl(lbl)
+        return (fam_order[f], var_order[v], lbl)
+
+    return sorted(labels, key=key)
+
+
+# ----------------------------------------------------------------------------------
+
 _IMPL_ORDER = [
     "Pipelined Paard",
     "Classic Paard",
@@ -35,17 +125,45 @@ _IMPL_ORDER = [
     "Classic HD",
 ]
 
-# Sweep line colours (cycled if more curves than entries; no pink)
-_SWEEP_PALETTE = [
-    "#A5D6A7",  # light green
+# Baseline sweep: dotted dark blue on every panel. Other knobs: solid cycle red, light blue,
+# yellow, light green (repeat if more than four non-baseline sweeps).
+_BASELINE_DOTTED_COLOR = "#0D47A1"
+_SWEEP_SOLID_KNOB_COLORS = [
+    "#D32F2F",  # red
+    "#64B5F6",  # light blue
     "#FFEB3B",  # yellow
-    "#9575CD",  # purple
-    "#42A5F5",  # light blue
+    "#A5D6A7",  # light green
 ]
 
 
-def _sweep_color_map(sweeps: list) -> dict:
-    return {s: _SWEEP_PALETTE[i % len(_SWEEP_PALETTE)] for i, s in enumerate(sweeps)}
+def _sweep_line_styles(sweeps: list[str], _impl: str) -> dict[str, dict[str, object]]:
+    """
+    Baseline: dotted **dark blue** (same on all panels).
+
+    Other knobs: **solid** lines, colours cycle red → light blue → yellow → light green.
+    """
+    sweeps_ord = sorted(sweeps, key=lambda s: (s != "baseline", s))
+    pool = _SWEEP_SOLID_KNOB_COLORS
+
+    out: dict[str, dict[str, object]] = {}
+    k = 0
+    for sw in sweeps_ord:
+        if sw == "baseline":
+            out[sw] = {
+                "color": _BASELINE_DOTTED_COLOR,
+                "linestyle": ":",
+                "linewidth": 2.7,
+                "zorder": 12,
+            }
+        else:
+            out[sw] = {
+                "color": pool[k % len(pool)],
+                "linestyle": "-",
+                "linewidth": 2.35,
+                "zorder": 5 + k,
+            }
+            k += 1
+    return out
 
 
 def load_benchmark_csv(path: Path) -> pd.DataFrame:
@@ -202,7 +320,6 @@ def plot_faceted_sweep(
     nrow = (n + ncol - 1) // ncol
 
     sweeps = sorted(pd.unique(df["sweep"]), key=lambda s: (s != "baseline", s))
-    sweep_color = _sweep_color_map(sweeps)
 
     sns.set_theme(style="whitegrid", context="talk", font_scale=0.95)
     fig, axes = plt.subplots(nrow, ncol, figsize=(5.8 * ncol, 4.2 * nrow), squeeze=False)
@@ -210,24 +327,28 @@ def plot_faceted_sweep(
 
     for ax, impl in zip(axes_f, impl_list):
         sub = df[df["impl"] == impl].sort_values("input_bytes")
+        sweep_styles = _sweep_line_styles(list(sweeps), impl)
         for sw in sweeps:
             ss = sub[sub["sweep"] == sw]
             if ss.empty:
                 continue
+            st = sweep_styles[sw]
             ax.plot(
                 ss["input_bytes"],
                 ss[metric],
                 label=sw,
-                color=sweep_color[sw],
-                linestyle="-",
-                linewidth=2.5,
+                color=st["color"],
+                linestyle=st["linestyle"],
+                linewidth=st["linewidth"],
+                zorder=st["zorder"],
                 marker=None,
             )
         ax.set_xscale("log")
         if log_y:
             ax.set_yscale("log")
         ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_bytes_axis))
-        ax.set_title(impl, fontweight="bold", fontsize=10)
+        tc = family_color_for_impl(impl)
+        ax.set_title(impl, fontweight="bold", fontsize=10, color=tc)
         ax.set_xlabel("Input size (bytes)")
         ax.set_ylabel(ylabel)
         ax.grid(True, which="minor", ls="--", alpha=0.3)
@@ -256,7 +377,7 @@ def plot_family_four_panel_sweep(
     """
     Four panels (2×2), same style as per-impl faceted plots:
     top row = Ring (Pipelined | Classic); bottom row = Paard (6r) or HD (8r).
-    Colors = sweep; all solid lines.
+    Sweeps use tints of each panel's algo color + distinct linestyles.
     """
     if tier == "8r":
         grid = [
@@ -273,7 +394,6 @@ def plot_family_four_panel_sweep(
 
     present = set(df["impl"].unique())
     sweeps = sorted(pd.unique(df["sweep"]), key=lambda s: (s != "baseline", s))
-    sweep_color = _sweep_color_map(sweeps)
 
     sns.set_theme(style="whitegrid", context="talk", font_scale=0.95)
     fig, axes = plt.subplots(2, 2, figsize=(11.6, 8.2), squeeze=False)
@@ -286,24 +406,28 @@ def plot_family_four_panel_sweep(
                 ax.set_visible(False)
                 continue
             sub = df[df["impl"] == impl].sort_values("input_bytes")
+            sweep_styles = _sweep_line_styles(list(sweeps), impl)
             for sw in sweeps:
                 ss = sub[sub["sweep"] == sw]
                 if ss.empty:
                     continue
+                st = sweep_styles[sw]
                 ax.plot(
                     ss["input_bytes"],
                     ss[metric],
                     label=sw,
-                    color=sweep_color[sw],
-                    linestyle="-",
-                    linewidth=2.5,
+                    color=st["color"],
+                    linestyle=st["linestyle"],
+                    linewidth=st["linewidth"],
+                    zorder=st["zorder"],
                     marker=None,
                 )
             ax.set_xscale("log")
             if log_y:
                 ax.set_yscale("log")
             ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_bytes_axis))
-            ax.set_title(impl, fontweight="bold", fontsize=10)
+            tc = family_color_for_impl(impl)
+            ax.set_title(impl, fontweight="bold", fontsize=10, color=tc)
             ax.set_xlabel("Input size (bytes)")
             ax.set_ylabel(ylabel)
             ax.grid(True, which="minor", ls="--", alpha=0.3)
