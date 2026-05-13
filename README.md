@@ -56,6 +56,7 @@ To add a new implementation, you will have to modify these files
 
 
 
-ALLREDUCE_B=4 sbatch --output=results/8r_B4.csv --error=results/8r_B4.err ./run_8r.sh -r
- 
-ALLREDUCE_B=8 sbatch --output=results/8r_B8.csv --error=results/8r_B8.err ./run_8r.sh -r
+
+ALLREDUCE_BENCH_STACK=1 sbatch --output=results/8r_baseline_stack.csv --error=results/8r_baseline_stack.err ./run_8r.sh -r
+
+ALLREDUCE_BENCH_STACK=1 sbatch --output=results/6r_baseline_stack.csv --error=results/6r_baseline_stack.err ./run.sh -r
